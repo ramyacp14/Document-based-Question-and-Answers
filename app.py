@@ -8,97 +8,101 @@ from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTex
 from langchain.vectorstores import Chroma
 from langchain.embeddings import HuggingFaceEmbeddings
 
-huggingfacehub_api_token = os.environ["HUGGINGFACE_EDU"] # Store the API token in a .env file
+# Set up the HuggingFace API token from environment variables
+huggingfacehub_api_token = os.getenv("HUGGINGFACE_EDU")
 
-# Customize the layout
-st.set_page_config(page_title="DocQA", page_icon="🤖", layout="wide", )     
-st.markdown(f"""
+# Set Streamlit app configuration
+st.set_page_config(page_title="Document Q&A", page_icon="🤖", layout="wide")     
+st.markdown("""
             <style>
-            .stApp {{background-image: url("https://images.unsplash.com/photo-1468779036391-52341f60b55d?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1968&q=80"); 
+            .stApp {background-image: url("https://images.unsplash.com/photo-1468779036391-52341f60b55d?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1968&q=80"); 
                      background-attachment: fixed;
-                     background-size: cover}}
-         </style>
-         """, unsafe_allow_html=True)
+                     background-size: cover}
+            </style>
+            """, unsafe_allow_html=True)
 
-# function for writing uploaded file in temp
-def write_text_file(content, file_path):
+# Function to save the uploaded file to a temp directory
+def save_file(content, path):
     try:
-        with open(file_path, 'w') as file:
+        with open(path, 'w') as file:
             file.write(content)
         return True
     except Exception as e:
-        print(f"Error occurred while writing the file: {e}")
+        print(f"Error saving file: {e}")
         return False
 
-def is_docx_file(file):
-    # Check if the file extension is .docx
-    if file.name.split(".")[-1].lower() == "docx":
-        return True
-    else:
-        return False
+# Function to check if the uploaded file is a .docx format
+def is_docx(file):
+    return file.name.split(".")[-1].lower() == "docx"
 
-# set prompt template
-prompt_template = """
-You are an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. Below is some information. 
+# Define prompt template for the LLM
+template = """
+You are a helpful and polite AI assistant. Below is some context information. 
 {context}
 
-Based on the above information only, answer the below question. 
+Based on the provided information, please answer the following question: 
 
 {question}
 """
+prompt = PromptTemplate.from_template(template)
 
-prompt = PromptTemplate.from_template(prompt_template)
-
-st.title("📄 Document Question Answering")
+# Display the app title and select box for model selection
+st.title("📄 Document-Based Q&A")
 st.text("𓅃 Powered by Falcon-7B")
 
-option = st.selectbox(
-    'Which LLM would you like to use?',
+model_choice = st.selectbox(
+    'Choose the language model:',
     ('Falcon-7B', 'Dolly-v2-3B'))
 
+model_repo = {'Falcon-7B': "tiiuae/falcon-7b-instruct", 'Dolly-v2-3B': "databricks/dolly-v2-3b"}
+chosen_model = model_repo[model_choice]
 
-model_dict = {'Falcon-7B': "tiiuae/falcon-7b-instruct", 'Dolly-v2-3B': "databricks/dolly-v2-3b"}
-
-repo_id = model_dict[option] if option else "tiiuae/falcon-7b-instruct"
-
+# Set up HuggingFaceHub model
 llm = HuggingFaceHub(huggingfacehub_api_token=huggingfacehub_api_token, 
-                     repo_id=repo_id, 
-                     model_kwargs={"temperature":0.6, "max_new_tokens":250 if option=='Dolly-v2-3B' else 500 }) # "max_new_tokens":500})
+                     repo_id=chosen_model, 
+                     model_kwargs={"temperature": 0.6, "max_new_tokens": 250 if model_choice == 'Dolly-v2-3B' else 500})
+
 embeddings = HuggingFaceEmbeddings()
 llm_chain = LLMChain(prompt=prompt, llm=llm)
 
-uploaded_file = st.file_uploader("Upload an article", type=["docx", "txt"])
-flag = 0
+# File uploader widget
+uploaded_file = st.file_uploader("Upload a document (.docx or .txt)", type=["docx", "txt"])
+file_ready = False
 
-if uploaded_file is not None:
-    if is_docx_file(uploaded_file):
-        document = Document(uploaded_file)
-        paragraphs = [p.text for p in document.paragraphs]
-        
-        content = "\n".join(paragraphs)
-        file_path = "temp/file.txt"
-        write_text_file(content, file_path)   
-        # st.write(content)
+# File processing and loading
+if uploaded_file:
+    if is_docx(uploaded_file):
+        doc = Document(uploaded_file)
+        file_text = "\n".join([p.text for p in doc.paragraphs])
+        file_path = "temp/document.txt"
+        save_file(file_text, file_path)
     else:
-        content = uploaded_file.read().decode('utf-8')
-        file_path = "temp/file.txt"
-        write_text_file(content, file_path)   
+        file_text = uploaded_file.read().decode('utf-8')
+        file_path = "temp/document.txt"
+        save_file(file_text, file_path)
+
+    # Load the document and split it into chunks
     loader = TextLoader(file_path)
-    docs = loader.load()    
+    documents = loader.load()    
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=256, chunk_overlap=0, separators=[" ", ",", "\n", "."]
     )
-    texts = text_splitter.split_documents(docs)
-    db = Chroma.from_documents(texts, embeddings)    
-    st.success("File Loaded Successfully!!")
-    flag = 1
+    chunks = text_splitter.split_documents(documents)
+    vector_db = Chroma.from_documents(chunks, embeddings)    
+    st.success("File loaded successfully!")
+    file_ready = True
 
-# Query through LLM    
-if flag == 1:
-    question = st.text_input("Ask something from the file", placeholder="Find something similar to: ....this.... in the text?", disabled=not uploaded_file)    
-    if question:
-        similar_doc = db.similarity_search(question, k=1)
-        context = similar_doc[0].page_content
-        query_llm = LLMChain(llm=llm, prompt=prompt)
-        response = query_llm.run({"context": context, "question": question})        
+# Process user queries when the file is ready
+if file_ready:
+    query = st.text_input("Ask a question based on the document", placeholder="Example: Find references to ...", disabled=not uploaded_file)
+    if query:
+        # Perform similarity search
+        results = vector_db.similarity_search(query, k=1)
+        context = results[0].page_content
+
+        # Run the query through the language model
+        response_chain = LLMChain(llm=llm, prompt=prompt)
+        response = response_chain.run({"context": context, "question": query})
+
+        # Display the result
         st.write(response)
